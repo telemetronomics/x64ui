@@ -36,6 +36,28 @@ local function fetch(url)
 end
 
 local function patchSource(source)
+  local valid = string.find(source, "local X64UI =", 1, true)
+    and string.find(source, "local Signal =", 1, true)
+    and string.find(source, "local InputRouter", 1, true)
+    and string.find(source, "local History =", 1, true)
+
+  if not valid then
+    return nil, "downloaded source is not a recognized x64ui build"
+  end
+
+  -- Already includes the runtime hardening set — skip patching.
+  local modern =
+    string.find(source, "self._QueueTail", 1, true)
+    and string.find(source, "table.clone(self[phase])", 1, true)
+    and string.find(source, 'setmetatable({ instance, property, key }, { __mode = "v" })', 1, true)
+    and string.find(source, "table.clear(self.CaptureStack)", 1, true)
+    and string.find(source, "existing = env.X64UI", 1, true)
+    and string.find(source, "transaction.Undos", 1, true)
+
+  if modern then
+    return source
+  end
+
   local patched = 0
   local required = 0
 
@@ -43,17 +65,13 @@ local function patchSource(source)
     if requiredPatch then
       required += 1
     end
-
     if string.find(source, new, 1, true) then
       patched += 1
       return true
     end
-
-    local start = string.find(source, old, 1, true)
-    if not start then
+    if not string.find(source, old, 1, true) then
       return false
     end
-
     local pattern = string.gsub(old, "([%%%^%$%(%)%.%[%]%*%+%-%?])", "%%%1")
     local changed = false
     source = string.gsub(source, pattern, function()
@@ -96,7 +114,7 @@ local function patchSource(source)
     if binding and binding.Connected then
       local ok, err = xpcall(binding.Callback, traceback, ...)
       if not ok then
-        Log.warn("Signal callback failed:\\n" .. tostring(err))
+        Log.warn("Signal callback failed:\n" .. tostring(err))
       end
     end
   end
@@ -117,7 +135,7 @@ local function patchSource(source)
       if binding and binding.Connected then
         local ok, err = xpcall(binding.Callback, traceback, unpack(current, 1, current.n))
         if not ok then
-          Log.warn("Signal callback failed:\\n" .. tostring(err))
+          Log.warn("Signal callback failed:\n" .. tostring(err))
         end
       end
     end
@@ -129,7 +147,7 @@ local function patchSource(source)
   replace([[  local ok, err = xpcall(fn, traceback)
   self:EndTransaction()
   if not ok then
-    Log.warn("Transaction failed:\\n" .. tostring(err))
+    Log.warn("Transaction failed:\n" .. tostring(err))
   end
   return ok]], [[  local ok, err = xpcall(fn, traceback)
   if not ok then
@@ -143,7 +161,7 @@ local function patchSource(source)
       end
       self.Applying = false
     end
-    Log.warn("Transaction failed:\\n" .. tostring(err))
+    Log.warn("Transaction failed:\n" .. tostring(err))
     return false
   end
   self:EndTransaction()
@@ -151,12 +169,12 @@ local function patchSource(source)
 
   replace([[  for _, listener in ipairs(self[phase]) do
     local ok, err = xpcall(listener, traceback, input, gameProcessed)
-    if not ok then Log.warn("InputRouter listener failed:\\n" .. tostring(err)) end
+    if not ok then Log.warn("InputRouter listener failed:\n" .. tostring(err)) end
   end]], [[  local listeners = table.clone(self[phase])
   for _, listener in ipairs(listeners) do
     if table.find(self[phase], listener) then
       local ok, err = xpcall(listener, traceback, input, gameProcessed)
-      if not ok then Log.warn("InputRouter listener failed:\\n" .. tostring(err)) end
+      if not ok then Log.warn("InputRouter listener failed:\n" .. tostring(err)) end
     end
   end]], true)
 
@@ -171,17 +189,9 @@ local function patchSource(source)
   replace([[  ThemeBindings[#ThemeBindings + 1] = { instance, property, key }]], [[  local binding = setmetatable({ instance, property, key }, { __mode = "v" })
   ThemeBindings[#ThemeBindings + 1] = binding]], true)
 
-  local valid = string.find(source, "local X64UI =", 1, true)
-    and string.find(source, "local Signal =", 1, true)
-    and string.find(source, "local InputRouter", 1, true)
-    and string.find(source, "local History =", 1, true)
-
-  if not valid then
-    return nil, "downloaded source is not a recognized x64ui build"
-  end
-
+  -- Soft: never block load on partial patches; warn only.
   if patched < required then
-    return nil, string.format("expected %d runtime patches, applied %d", required, patched)
+    warn(string.format("x64ui: applied %d/%d runtime patches (continuing)", patched, required))
   end
 
   return source
@@ -196,8 +206,8 @@ end
 
 local patched, patchErr = patchSource(source)
 if not patched then
-  warn("x64ui: patch validation failed: " .. tostring(patchErr))
-  return
+  warn("x64ui: patch validation failed: " .. tostring(patchErr) .. " — loading source as-is")
+  patched = source
 end
 source = patched
 

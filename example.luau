@@ -3,10 +3,44 @@
   loads the library via the official loader, then demos the full chrome + controls
 ]]
 
-local X64UI = loadstring(game:HttpGet("https://raw.githubusercontent.com/territorialism/x64ui/main/loader.luau"))()
+local function loadX64UI()
+  local bust = tostring(os.clock())
+  local urls = {
+    "https://raw.githubusercontent.com/territorialism/x64ui/main/loader.luau?" .. bust,
+    "https://raw.githubusercontent.com/territorialism/x64ui/main/main.luau?" .. bust,
+  }
+  for _, url in ipairs(urls) do
+    local okFetch, source = pcall(function()
+      return game:HttpGet(url)
+    end)
+    if okFetch and type(source) == "string" and #source > 0 then
+      local okCompile, fn = pcall(function()
+        return loadstring(source)()
+      end)
+      -- loadstring(...)() can return table directly; or loadstring returns fn
+      if okCompile and type(fn) == "table" and fn.CreateWindow then
+        return fn
+      end
+      -- try compile-only path
+      local ok2, chunk = pcall(loadstring, source)
+      if ok2 and type(chunk) == "function" then
+        local ok3, lib = pcall(chunk)
+        if ok3 and type(lib) == "table" and lib.CreateWindow then
+          return lib
+        end
+        if not ok3 then
+          warn("[example] runtime: " .. tostring(lib))
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local X64UI = loadX64UI()
 
 if not X64UI then
-  warn("[example] failed to load x64ui")
+  warn("[example] failed to load x64ui (loader + main)")
   return
 end
 

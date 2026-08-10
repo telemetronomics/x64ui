@@ -228,3 +228,10 @@ if not ran then
   warn("x64ui: runtime error: " .. tostring(lib))
   return
 end
+
+if type(lib) ~= "table" then
+  warn("x64ui: main.luau did not return the library table")
+  return
+end
+
+return lib

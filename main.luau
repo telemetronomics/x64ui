@@ -282,9 +282,11 @@ function Signal:Connect(callback)
 
   table.insert(self.Bindings, binding)
 
-  local connection = {
+  local connection
+  connection = {
     Connected = true,
     Disconnect = function()
+      if not binding.Connected then return end
       binding.Connected = false
       connection.Connected = false
 
@@ -297,6 +299,7 @@ function Signal:Connect(callback)
     end,
   }
 
+  binding.Connection = connection
   return connection
 end
 
@@ -311,10 +314,8 @@ function Signal:Fire(...)
   end
 
   self._Firing = true
-  local n = select("#", ...)
-  -- iterate backwards so Disconnect during fire is safe without clone
-  for i = #self.Bindings, 1, -1 do
-    local binding = self.Bindings[i]
+  local snapshot = table.clone(self.Bindings)
+  for _, binding in ipairs(snapshot) do
     if binding and binding.Connected then
       local ok, err = xpcall(binding.Callback, traceback, ...)
       if not ok then
@@ -335,7 +336,12 @@ function Signal:ConnectDeferred(callback)
 end
 
 function Signal:Destroy()
+  if self.Destroyed then return end
   self.Destroyed = true
+  for _, binding in ipairs(self.Bindings) do
+    binding.Connected = false
+    if binding.Connection then binding.Connection.Connected = false end
+  end
   table.clear(self.Bindings)
 end
 
@@ -2261,6 +2267,7 @@ end
 function Tab:Destroy()
   if self.Destroyed then return end
   self.Destroyed = true
+  if self.Page then pcall(function() self.Page:Destroy() end) end
   if self.Frame then pcall(function() self.Frame:Destroy() end) end
   if self.Button then pcall(function() self.Button:Destroy() end) end
 end
@@ -3791,14 +3798,17 @@ function Groupbox:AddTable(name, opts)
   local columns = opts.Columns or { "Col1", "Col2" }
   local rows = opts.Rows or {}
   local height = opts.Height or 120
+  assert(type(columns) == "table" and #columns > 0, "AddTable: Columns must be a nonempty array")
+  assert(type(rows) == "table", "AddTable: Rows must be an array")
+  assert(type(height) == "number" and height > 0 and height < math.huge, "AddTable: invalid Height")
   local rowFrame = createControlFrame(self, nil, true, false)
   Create.create("TextLabel", {
-    Parent = rowFrame, Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
+    Parent = rowFrame, LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
     Text = opts.Text or name or "Table", TextXAlignment = Enum.TextXAlignment.Left,
     Font = Theme.Font, TextSize = Theme.TextSize, TextColor3 = Theme.Text,
   })
   local header = Create.create("Frame", {
-    Parent = rowFrame, Size = UDim2.new(1, 0, 0, 18), BackgroundColor3 = Theme.PanelAlt, BorderSizePixel = 0,
+    Parent = rowFrame, LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 18), BackgroundColor3 = Theme.PanelAlt, BorderSizePixel = 0,
   })
   local colW = 1 / math.max(#columns, 1)
   for i, col in ipairs(columns) do
@@ -3809,7 +3819,7 @@ function Groupbox:AddTable(name, opts)
     })
   end
   local scroll = Create.create("ScrollingFrame", {
-    Parent = rowFrame, Position = UDim2.fromOffset(0, 18), Size = UDim2.new(1, 0, 0, height),
+    Parent = rowFrame, LayoutOrder = 3, Size = UDim2.new(1, 0, 0, height),
     BackgroundColor3 = Theme.Background, BorderColor3 = Theme.Border, ScrollBarThickness = 6,
     ScrollBarImageColor3 = Theme.Scroll, CanvasSize = UDim2.new(),
   })
@@ -3827,27 +3837,68 @@ function Groupbox:AddTable(name, opts)
         Parent = scroll, Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, LayoutOrder = ri,
       })
       for ci, col in ipairs(columns) do
-        local cell = rowData[col] or rowData[ci] or ""
+        local cell = rowData[col]
+        if cell == nil then cell = rowData[ci] end
+        if cell == nil then cell = "" end
         Create.create("TextLabel", {
           Parent = r, Size = UDim2.new(colW, 0, 1, 0), Position = UDim2.new(colW * (ci - 1), 0, 0, 0),
-          BackgroundTransparency = 1, Text = " " .. tostring(cell), TextXAlignment = Enum.TextXAlignment.Left,
+          BackgroundTransparency = 1, Text = " " .. tostring(cell), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
           Font = Theme.Font, TextSize = 12, TextColor3 = Theme.Text,
         })
       end
     end
-    scroll.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 4)
+    scroll.CanvasSize = UDim2.fromOffset(0, #rows * 18 + 4)
   end
   rebuild()
   function obj:SetRows(newRows)
+    assert(newRows == nil or type(newRows) == "table", "SetRows: expected an array")
+    if self.Destroyed then return end
+    local previous = rows
     rows = newRows or {}
     obj.Rows = rows
     rebuild()
+    obj.Changed:Fire(rows, previous)
   end
   function obj:GetRows() return obj.Rows end
-  function obj:Destroy() BaseControl.Destroy(self) end
+  function obj:Destroy()
+    if self.Destroyed then return end
+    self.Changed:Destroy()
+    BaseControl.Destroy(self)
+  end
   self.Window.Maid:Give(obj)
   if name then self.Window.Registry:Register(name, obj, "Option") end
   return obj
+end
+
+-- Presentation only: the caller supplies actual data and debugging operations.
+function Window:AddDebuggerTab(name)
+  name = name or "CPU"
+  assert(type(name) == "string" and name ~= "", "AddDebuggerTab: invalid name")
+  assert(not self.Tabs[name], "AddDebuggerTab: tab already exists")
+  local tab = self:AddTab(name)
+  local disassembly = tab:AddLeftGroupbox("Disassembly")
+  local dump = tab:AddLeftGroupbox("Memory dump")
+  local registers = tab:AddRightGroupbox("Registers")
+  local stack = tab:AddRightGroupbox("Stack")
+  local watch = tab:AddRightGroupbox("Watch")
+  return {
+    Tab = tab,
+    Disassembly = disassembly:AddTable(nil, {
+      Text = "Instructions", Columns = { "Address", "Bytes", "Instruction", "Comment" }, Height = 260,
+    }),
+    Dump = dump:AddTable(nil, {
+      Text = "Memory", Columns = { "Address", "Bytes", "Text" }, Height = 160,
+    }),
+    Registers = registers:AddTable(nil, {
+      Text = "Registers", Columns = { "Register", "Value", "Comment" }, Height = 180,
+    }),
+    Stack = stack:AddTable(nil, {
+      Text = "Stack", Columns = { "Address", "Value", "Comment" }, Height = 150,
+    }),
+    Watch = watch:AddTable(nil, {
+      Text = "Expressions", Columns = { "Expression", "Value" }, Height = 100,
+    }),
+  }
 end
 
 function Tab:AddLabel(...) return self:GetDefaultGroupbox():AddLabel(...) end

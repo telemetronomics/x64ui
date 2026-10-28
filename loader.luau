@@ -1,10 +1,9 @@
 local function fetch(url)
-  local clients = {
-    type(syn) == "table" and syn.request,
-    type(http) == "table" and http.request,
-    type(http_request) == "function" and http_request,
-    type(request) == "function" and request,
-  }
+  local clients = {}
+  if type(syn) == "table" and type(syn.request) == "function" then table.insert(clients, syn.request) end
+  if type(http) == "table" and type(http.request) == "function" then table.insert(clients, http.request) end
+  if type(http_request) == "function" then table.insert(clients, http_request) end
+  if type(request) == "function" then table.insert(clients, request) end
 
   for _, client in ipairs(clients) do
     if type(client) == "function" then
@@ -197,7 +196,7 @@ local function patchSource(source)
   return source
 end
 
-local url = "https://raw.githubusercontent.com/territorialism/x64ui/main/main.luau"
+local url = "https://raw.githubusercontent.com/telemetronomics/x64ui/main/main.luau"
 local source = fetch(url)
 if not source then
   warn("x64ui: failed to fetch main.luau")

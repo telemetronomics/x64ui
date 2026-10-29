@@ -5168,4 +5168,73 @@ elseif shared then
   shared.X64UI = X64UI
 end
 
+-- Keep window positions fixed during a resize and handle UIScale in pixels.
+do
+  local function bounds(win)
+    local viewport = getViewportSize(win.Gui)
+    local scale = math.max((win.UIScale and win.UIScale.Scale) or 1, 0.01)
+    return viewport, scale
+  end
+
+  function Window:ClampToViewport()
+    if self.Destroyed or self.Maximized or self.Minimized or self._Dragging or self._Resizing then return end
+    if not self.Main or not self.Main.Parent then return end
+    local viewport, scale = bounds(self)
+    local availableX, availableY = math.max(1, viewport.X - 16), math.max(1, viewport.Y - 16)
+    local width = math.clamp(self.Main.AbsoluteSize.X / scale, math.min(760, availableX / scale), availableX / scale)
+    local height = math.clamp(self.Main.AbsoluteSize.Y / scale, math.min(420, availableY / scale), availableY / scale)
+    local size = self.Main.Size
+    if size.X.Scale ~= 0 or size.Y.Scale ~= 0 or math.abs(size.X.Offset - width) > 0.5 or math.abs(size.Y.Offset - height) > 0.5 then
+      self.Main.Size = UDim2.fromOffset(width, height)
+      self:UpdateLayout()
+    end
+    local pos = self.Main.Position
+    local x = math.clamp(pos.X.Offset, 8, math.max(8, viewport.X - 8 - width * scale))
+    local y = math.clamp(pos.Y.Offset, 8, math.max(8, viewport.Y - 8 - height * scale))
+    if pos.X.Scale ~= 0 or pos.Y.Scale ~= 0 or pos.X.Offset ~= x or pos.Y.Offset ~= y then
+      self.Main.Position = UDim2.fromOffset(x, y)
+    end
+  end
+
+  function Window:MakeResizable(frame, grip)
+    local resizing, startMouse, startSize = false, Vector2.zero, Vector2.zero
+    local function beginResize(input)
+      if resizing or self.Destroyed or not frame.Parent or not grip.Parent or not grip.Visible
+        or not self.Main.Visible or self.Minimized or self.Maximized
+        or UserInputService:GetFocusedTextBox() then return end
+      local _, scale = bounds(self)
+      resizing, self._Resizing = true, true
+      startMouse = getMousePos()
+      startSize = frame.AbsoluteSize / scale
+      self:Focus()
+    end
+    self:Track(grip.InputBegan:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 then beginResize(input) end
+    end))
+    self:Track(UserInputService.InputBegan:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 and mouseOverGui(grip) then beginResize(input) end
+    end))
+    self:Track(UserInputService.InputChanged:Connect(function(input)
+      if not resizing or input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+      local viewport, scale = bounds(self)
+      local pos, delta = frame.Position, getMousePos() - startMouse
+      local maxX = math.max(1, (viewport.X - 8 - pos.X.Offset) / scale)
+      local maxY = math.max(1, (viewport.Y - 8 - pos.Y.Offset) / scale)
+      local width = math.clamp(startSize.X + delta.X / scale, math.min(760, maxX), maxX)
+      local height = math.clamp(startSize.Y + delta.Y / scale, math.min(420, maxY), maxY)
+      frame.Size = UDim2.fromOffset(width, height)
+      self:UpdateLayout()
+    end))
+    local function finishResize()
+      if not resizing then return end
+      resizing, self._Resizing = false, false
+      self:ClampToViewport()
+    end
+    self:Track(UserInputService.InputEnded:Connect(function(input)
+      if input.UserInputType == Enum.UserInputType.MouseButton1 then finishResize() end
+    end))
+    self:Track(UserInputService.WindowFocusReleased:Connect(finishResize))
+  end
+end
+
 return X64UI
